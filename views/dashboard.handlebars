@@ -1,0 +1,35 @@
+<div class="shell">
+  <aside class="sidebar">
+    <a href="/" class="brand"><span class="brand-icon">◉</span> OPENSHIFT <strong>WATCH</strong></a>
+    <div class="side-label">WORKSPACE</div>
+    <a href="#overview" class="nav active"><span>▦</span> Overview</a>
+    <a href="#incidents-section" class="nav"><span>⚑</span> Incidents <b id="nav-incidents">0</b></a>
+    <div class="side-label">WATCHED PROJECTS</div>
+    <div id="project-list" class="project-list">Choose projects to start</div>
+    <button id="configure" class="button sidebar-button">Manage projects</button>
+    <div class="sidebar-bottom"><span class="local-dot"></span> Local monitor<div>No cluster deployment</div></div>
+  </aside>
+  <main id="overview">
+    <header class="topbar"><div class="breadcrumb">Workspace <span>/</span> Overview</div><span id="mode" class="mode">{{#if demo}}DEMO{{else}}LIVE{{/if}}</span></header>
+    <div class="page-heading"><div><div class="eyebrow">CLUSTER OBSERVABILITY</div><h1>Application health</h1><p>One view of your projects. A heads-up when something needs you.</p></div><div class="heading-actions"><button class="button" id="notifications">Enable notifications</button><button class="button primary" id="refresh">↻ Check now</button></div></div>
+    <div class="connection-bar"><span id="connection-dot" class="connection-dot"></span><strong id="connection">Connecting…</strong><span id="context"></span><span id="last-check" class="last-check">Waiting for first check</span></div>
+    <div id="messages" role="status" aria-live="polite"></div>
+    {{#if demo}}<div class="demo-bar"><strong>Demo playground</strong><span>Try an incident, then check again to confirm it.</span><select id="scenario" aria-label="Demo scenario"><option value="healthy">All healthy</option><option value="outage">App outage</option><option value="degraded">Partial replica loss</option><option value="connection">Lost cluster access</option></select></div>{{/if}}
+    <section class="stats" aria-label="Health summary">
+      <article class="stat"><div>Monitored apps <span>▦</span></div><strong id="total">0</strong><small id="project-count">Across 0 projects</small></article>
+      <article class="stat healthy-stat"><div>Healthy <span>●</span></div><strong id="healthy">0</strong><small>All desired replicas ready</small></article>
+      <article class="stat degraded-stat"><div>Degraded <span>●</span></div><strong id="degraded">0</strong><small>Partial capacity or pod issues</small></article>
+      <article class="stat down-stat"><div>Down <span>●</span></div><strong id="down">0</strong><small>No ready replicas</small></article>
+    </section>
+    <section class="panel apps-panel">
+      <div class="panel-heading"><div><h2>Applications <span id="app-count" class="count">0</span></h2><p>Workloads and their pods, checked through your local oc CLI.</p></div><div class="filters"><input id="search" type="search" placeholder="Search applications…" aria-label="Search applications"><select id="status-filter" aria-label="Filter health"><option value="all">All statuses</option><option value="healthy">Healthy</option><option value="degraded">Degraded</option><option value="down">Down</option><option value="unknown">Unknown</option><option value="scaled-zero">Scaled to zero</option><option value="completed">Completed</option></select></div></div>
+      <div class="table-scroll"><table><thead><tr><th>APPLICATION</th><th>PROJECT</th><th>STATUS</th><th>READY / DESIRED</th><th>RESTARTS</th><th>DETAILS</th></tr></thead><tbody id="app-rows"></tbody></table></div>
+      <div id="empty" class="empty"><span>◎</span><h3>Choose the projects you want to watch</h3><p>Use Manage projects to select your OpenShift namespaces.</p></div>
+      <div class="panel-footer"><span id="observation-note">Read-only observations</span><span id="poll-note"></span></div>
+    </section>
+    <section class="panel" id="incidents-section"><div class="panel-heading"><div><h2>Incident activity <span id="incident-count" class="count">0</span></h2><p>Confirmed problems, acknowledgements, and recoveries.</p></div><label class="sound-toggle"><input id="sound" type="checkbox"> Alert sound</label></div><div id="incidents" class="incidents"></div></section>
+    <footer class="page-footer">OpenShift Watch <span>Local CLI · Read-only · No external assets or alert services</span></footer>
+  </main>
+</div>
+<dialog id="project-dialog"><form id="project-form"><div class="dialog-heading"><h2>Watch your projects</h2><button type="button" class="icon-button" id="close-dialog" aria-label="Close">×</button></div><p>Select projects you can access. You can also enter names directly if project listing is restricted.</p><button type="button" class="button" id="load-projects">Load accessible projects</button><div id="available-projects" class="available-projects"></div><label class="field-label" for="namespace-input">Project names, separated by commas</label><textarea id="namespace-input" rows="3" placeholder="my-project, another-project"></textarea><div id="project-error" class="form-error" role="alert"></div><div class="dialog-actions"><button class="button primary" type="submit">Save & start monitoring</button></div></form></dialog>
+<dialog id="detail-dialog"><div class="dialog-heading"><h2 id="detail-title">Pod details</h2><button class="icon-button" id="close-details" aria-label="Close">×</button></div><div id="detail-content"></div></dialog>
