@@ -4,16 +4,21 @@ const refKey = (kind, name) => `${kind}/${name}`;
 
 export function podHealth(pod) {
   const phase = pod.status?.phase || 'Unknown';
-  const statuses = [...(pod.status?.initContainerStatuses || []), ...(pod.status?.containerStatuses || [])];
+  const statuses = [...(pod.status?.initContainerStatuses || []), ...(pod.status?.containerStatuses || []), ...(pod.status?.ephemeralContainerStatuses || [])];
   const restarts = statuses.reduce((sum, c) => sum + (c.restartCount || 0), 0);
   const reason = statuses.map(c => c.state?.waiting?.reason || (c.state?.terminated?.exitCode ? c.state.terminated.reason || 'ContainerFailed' : '')).find(Boolean);
   const ready = phase === 'Running' && !pod.metadata.deletionTimestamp && pod.status?.conditions?.some(c => c.type === 'Ready' && c.status === 'True') && (pod.status?.containerStatuses || []).every(c => c.ready && !c.state?.waiting && !c.state?.terminated);
   const completed = phase === 'Succeeded';
   return {
     name: pod.metadata.name, phase, ready: Boolean(ready), completed, restarts,
+    owner: owner(pod) ? { kind: owner(pod).kind, name: owner(pod).name } : null,
     status: completed ? 'completed' : ready ? 'healthy' : 'down',
     reason: pod.metadata.deletionTimestamp ? 'Terminating' : reason || pod.status?.reason || (ready ? 'Ready' : phase),
-    containers: (pod.status?.containerStatuses || []).map(c => ({ name: c.name, ready: c.ready, restarts: c.restartCount || 0, reason: c.state?.waiting?.reason || c.state?.terminated?.reason || 'Running' }))
+    conditions: (pod.status?.conditions || []).filter(c => c.status !== 'True').map(c => ({ type: c.type, reason: c.reason || '', message: String(c.message || '').slice(0, 1000) })),
+    containers: [...new Set([...(pod.spec?.containers || []), ...(pod.spec?.initContainers || []), ...(pod.spec?.ephemeralContainers || []), ...statuses].map(c => c.name))].map(name => {
+      const c = statuses.find(s => s.name === name) || {};
+      return { name, type: (pod.spec?.initContainers || []).some(s => s.name === name) ? 'init' : (pod.spec?.ephemeralContainers || []).some(s => s.name === name) ? 'ephemeral' : 'app', ready: Boolean(c.ready), restarts: c.restartCount || 0, reason: c.state?.waiting?.reason || c.state?.terminated?.reason || (c.state?.running ? 'Running' : 'Not started'), lastReason: c.lastState?.terminated?.reason || '', exitCode: c.state?.terminated?.exitCode ?? c.lastState?.terminated?.exitCode ?? null };
+    })
   };
 }
 function selectorMatches(selector, labels = {}) {
@@ -63,7 +68,7 @@ export function buildApps(namespace, collection) {
       return !assigned.has(p.metadata.name) && selectorMatches(w.spec?.selector, p.metadata.labels);
     });
     matched.forEach(p => assigned.add(p.metadata.name));
-    const health = matched.map(podHealth);
+    const health = matched.map(p => ({ ...podHealth(p), workload: roots.get(p.metadata.name) || null }));
     const desired = w.kind === 'DaemonSet' ? w.status?.desiredNumberScheduled : (w.spec?.replicas ?? 1);
     const ready = health.filter(p => p.ready).length;
     const available = w.kind === 'DaemonSet' ? w.status?.numberAvailable : w.status?.availableReplicas;

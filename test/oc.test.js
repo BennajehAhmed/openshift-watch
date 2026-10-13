@@ -26,3 +26,10 @@ test('oc errors redact potentially sensitive stderr', async () => {
 test('config rejects invalid namespace and invalid polling interval', () => {
   assert.throws(() => namespaces(['--all-namespaces'])); assert.throws(() => getConfig({ POLL_SECONDS: 'NaN' })); assert.throws(() => getConfig({ POLL_SECONDS: '0' }));
 });
+test('snapshot logs use execFile with bounded buffers and the pinned context', async () => {
+  let argumentsPassed, options;
+  const client = new OcClient(config, async (bin, args, opts) => { argumentsPassed = args; options = opts; return { stdout: 'INFO test\n' }; });
+  const controller = new AbortController();
+  assert.equal(await client.logs({ namespace: 'dev', pod: 'api-1', container: 'web', tail: 500, sinceSeconds: 300, previous: true }, controller.signal), 'INFO test\n');
+  assert.ok(argumentsPassed.includes('--context=my-context')); assert.ok(argumentsPassed.includes('--previous=true')); assert.equal(options.shell, false); assert.equal(options.maxBuffer, 1048576 + 65536); assert.equal(options.signal, controller.signal);
+});

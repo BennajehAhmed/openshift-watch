@@ -66,6 +66,42 @@ The context is pinned when the monitor initializes. Changing your CLI's current 
 - CLI/RBAC/network failures create separate monitor incidents. Previous application rows become **Unknown** when their current observation is missing. Unknown observations never resolve an active outage. If the browser loses the live stream or checks become delayed, all displayed application statuses are temporarily shown as Unknown.
 - Removing a project stops monitoring it. Open incidents from removed projects remain marked as having no current observation; they are not reported as recovered. A disappeared previously seen controller with desired replicas above zero remains Down on a successful complete check. To intentionally stop tracking it, remove its project or restart the monitor after checking the planned change. The application cannot know about a workload deleted before its first observation.
 
+## Logs, incident clearing, and proposed fixes (1.1)
+
+Use **Inspect**, **Logs**, or **Proposed fixes** on an application row. The inspector has three tabs for pod health, container logs, and issue-specific guidance. Applications are sorted by severity; project/status filters, clickable summary cards, and pagination keep larger environments manageable. Incident activity has Active, Resolved, and All views.
+
+### Reading thousands of log lines
+
+- Choose a pod, then an application, init, or ephemeral container. Select a recent tail (500–10,000 lines) and a time window. **Load logs** runs a bounded `oc logs` snapshot with timestamps, a server-side tail, and a **1 MiB** byte limit. Long lines or large tails may hit the byte limit first; the viewer indicates that the returned slice is bounded. A snapshot does not retrieve all historical logs.
+- Enable **Previous container instance** to investigate a restart. It loads `oc logs --previous`; older output may be unavailable after rotation or pod replacement. Previous-instance logs do not support live streaming.
+- **Start live** opens one `oc logs --follow` process. Output arrives in batches and the server pauses CLI stdout when the browser connection applies backpressure. Stop, closing the inspector, switching tabs/targets, disconnecting, project removal, or server shutdown ends the live process. Each live session automatically ends at **five minutes or 20 MiB received**. Start another stream to continue.
+- The server permits at most **three simultaneous log reads/streams**. Snapshot reads have the usual CLI timeout and are cancelled if their HTTP connection closes. Streaming rejects individual lines larger than 64 KiB. These reads have independent concurrency limits from the four-process health collector.
+- The browser retains up to **20,000 lines / 4 MiB of log text** in a ring buffer, discarding older lines as new ones arrive. Only the visible rows and a small overscan window exist in the page; thousands of entries do not create thousands of DOM elements. Search is debounced and covers the retained window. Severity filters use simple text/JSON level detection, not a guaranteed interpretation of every log format.
+- Click a line to inspect/copy its full text. **Export loaded lines** downloads only retained lines matching the current filters. Loaded logs are not saved to incident files, the repository, or any external service. An export is an explicit local file download.
+- The existing account additionally needs **`get` permission on `pods/log`**. Only observed pods and containers in selected projects can be requested; there is no arbitrary CLI endpoint. Containers that have never started may have no logs.
+
+Examples of the additional read-only commands:
+
+```sh
+oc --context=YOUR_CONTEXT logs POD --namespace=YOUR_PROJECT --container=CONTAINER --tail=1000 --timestamps=true --since=3600s --limit-bytes=1048576 --request-timeout=15s
+oc --context=YOUR_CONTEXT logs POD --namespace=YOUR_PROJECT --container=CONTAINER --tail=1000 --timestamps=true --since=3600s --previous=true --limit-bytes=1048576 --request-timeout=15s
+oc --context=YOUR_CONTEXT logs POD --namespace=YOUR_PROJECT --container=CONTAINER --tail=1000 --timestamps=true --since=3600s --follow=true --request-timeout=0
+```
+
+### Clear the incident board
+
+Click **Clear board** and choose **Clear resolved only** or **Clear all incidents**. Clearing removes local history; it does not acknowledge a cluster recovery or repair a workload. Clearing all resets confirmation counters, so ongoing problems create fresh incidents when they meet the normal confirmation threshold again. Clearing is persisted in live mode and affects all tabs connected to that server. Demo mode stays isolated.
+
+### Issue and proposed fixes
+
+Guidance runs entirely locally using deterministic rules and observed pod/controller state. No model API is involved and logs are not sent out for analysis. It distinguishes crash loops, OOMKilled, image-pull failures, Pending/unschedulable pods, startup/config/mount failures, node disruptions, rollout/readiness issues, and missing observations.
+
+Each suggestion states the issue, investigation steps, proposed fixes, and copyable **PowerShell-formatted** `oc` commands with the pinned context and namespace. Commands are for you to review and run in your terminal; the application itself still executes read-only cluster operations. No delete, restart, scale, or edit endpoint exists.
+
+A non-force `oc delete pod` suggestion is available only for a verified ReplicaSet-owned pod attached to a Deployment, when no deterministic crash/image/memory/scheduling/startup failure was observed. It is marked disruptive and conditional on investigation, replica capacity, and approved change procedures. It explicitly explains that direct deletion does not enforce a PodDisruptionBudget. StatefulSets, Jobs, standalone pods, unknown/stale observations, and unverified selector-only ownership do not receive deletion advice. Kubernetes already retries crash-looping containers; deletion is not presented as a root-cause fix for a persistent error.
+
+The suggestions are possible investigations, not an automatic diagnosis or a guarantee that a proposed change will work. Recheck readiness and actual application behavior after any approved change.
+
 ## What counts as an application?
 
 Each Deployment, DeploymentConfig, StatefulSet, or DaemonSet is shown as a workload. Pods are connected using ownership chains through ReplicaSets/ReplicationControllers; workload selectors are a fallback if ownership data cannot be read. Jobs, builds, and standalone pods are shown separately by owner or pod name. Multiple workloads belonging to the same business application are shown as separate rows.
@@ -107,7 +143,7 @@ ALERT_ON_DEGRADED=true
 OC_BIN=C:\Tools\OpenShift\oc.exe
 ```
 
-If you edit `.env`, restart the server. No commands or credentials are accepted through the dashboard. Namespace input is validated; `oc` executes via `child_process.execFile()` with argument arrays and `shell: false`, timeouts, and bounded output. Calls are limited to four CLI processes at a time, checking one namespace after another. Saving/refresh operations are serialized.
+If you edit `.env`, restart the server. No arbitrary commands or credentials are accepted through the dashboard. Namespace input is validated; snapshot and health commands use `child_process.execFile()`, while live logs use `spawn()`, always with argument arrays and `shell: false`. Health collection allows at most four CLI processes, checking one namespace after another; on-demand logs have an independent maximum of three reads/streams. Snapshot requests use timeouts and bounded output; live sessions have the limits described above. Saving/refresh operations are serialized.
 
 ## Read-only permissions / exact commands
 
@@ -125,7 +161,7 @@ oc --context=YOUR_CONTEXT get deploymentconfigs.apps.openshift.io --namespace=YO
 
 It also uses `oc config current-context` when no explicit context was supplied. **Load accessible projects** runs `oc get projects -o json` with the pinned context and timeout. Project listing is optional. Each resource is requested independently, so a forbidden kind does not hide all other data. A missing DeploymentConfig API is tolerated on clusters that do not support it. Other permission failures are visible as an incomplete-monitoring incident.
 
-No mutation commands, pod exec, port-forwarding, log collection, shell pipelines, cluster token endpoints, email, Slack, or outbound webhooks are used. The HTTP server checks local Host/Origin headers and requires a startup-specific CSRF token for state changes. It is intended for a local user, not shared hosting; local processes with access to the same account can also reach the dashboard.
+No mutation commands, pod exec, port-forwarding, shell pipelines, cluster token endpoints, email, Slack, or outbound webhooks are executed. Log reads are on demand and bounded as described above. The HTTP server checks local Host/Origin headers and requires a startup-specific CSRF token for state changes and log requests. It is intended for a local user, not shared hosting; local processes with access to the same account can also reach the dashboard.
 
 ## Troubleshooting
 
@@ -145,7 +181,7 @@ No mutation commands, pod exec, port-forwarding, log collection, shell pipelines
 npm test
 ```
 
-Tests cover replica loss, no pods, scale-to-zero, readiness, init failures, completed jobs, legacy DC ownership, rollout generations, confirmation streaks, escalation, recovery, stale observations, disappearing workloads, CLI arguments/error redaction, and HTTP protections. Live-cluster behavior must be checked using your own approved account; no real OpenShift credentials are included.
+Tests cover replica loss, no pods, scale-to-zero, readiness, init failures, completed jobs, legacy DC ownership, rollout generations, confirmation streaks, escalation, recovery, stale observations, disappearing workloads, CLI arguments/error redaction, HTTP protections, log limits/validation/backpressure/cancellation, virtual log windows, incident clearing, and conditional troubleshooting guidance. Live-cluster behavior must be checked using your own approved account; no real OpenShift credentials are included.
 
 If obtaining dependencies yourself rather than using the included folder, use your approved npm registry/mirror:
 

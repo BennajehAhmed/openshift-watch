@@ -89,5 +89,11 @@ export class Monitor extends EventEmitter {
     this.incidents.acknowledge(id, new Date().toISOString());
     await this.persist(); this.state.incidents = this.incidents.history; this.publish();
   }
+  async clearIncidents(scope) {
+    if (this.running) await this.running;
+    const removed = this.incidents.clear(scope);
+    await this.persist(); this.state.incidents = this.incidents.history; this.publish();
+    return { removed, state: this.snapshot() };
+  }
   stop() { this.stopped = true; clearTimeout(this.timer); }
 }

@@ -41,4 +41,11 @@ export class Incidents {
     if (!incident) throw new Error('Incident not found.');
     incident.acknowledgedAt = timestamp;
   }
+  clear(scope) {
+    if (!['resolved', 'all'].includes(scope)) throw new Error('Choose resolved or all incidents.');
+    const before = this.history.length;
+    this.history = scope === 'resolved' ? this.history.filter(i => !i.resolvedAt) : [];
+    if (scope === 'all') this.counts.clear();
+    return before - this.history.length;
+  }
 }

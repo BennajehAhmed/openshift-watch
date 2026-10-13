@@ -3,10 +3,13 @@ import { engine } from 'express-handlebars';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { LogService } from './logs.js';
+import { proposeFixes } from './advice.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export function createApp(monitor) {
   const app = express(); const csrf = randomBytes(32).toString('hex');
+  const logs = new LogService(monitor); app.locals.logs = logs;
   app.disable('x-powered-by');
   app.use((req, res, next) => {
     // Loopback-only server plus Host check prevents DNS rebinding.
@@ -25,6 +28,16 @@ export function createApp(monitor) {
   app.use('/assets', express.static(path.join(root, 'public')));
   app.get('/', (req, res) => res.render('dashboard', { csrf, demo: monitor.config.demo }));
   app.get('/api/state', (req, res) => res.json(monitor.snapshot()));
+  app.get('/api/advice', (req, res) => {
+    let entity = monitor.state.apps.find(a => a.id === req.query.appId);
+    if (!entity) {
+      const incident = monitor.incidents.history.find(i => i.entityId === req.query.appId);
+      if (incident) entity = { ...incident, status: 'unknown', pods: [] };
+    }
+    if (!entity) return res.status(404).json({ error: 'Application or incident was not found.' });
+    if (monitor.state.checkedAt && Date.now() - Date.parse(monitor.state.checkedAt) > (monitor.config.pollSeconds + 20) * 1000) entity = { ...entity, status: 'unknown' };
+    res.json(proposeFixes(entity, monitor.client.context));
+  });
   app.get('/api/projects', async (req, res) => {
     if (!monitor.client.context) await monitor.client.initialize();
     res.json(await monitor.client.projects());
@@ -51,16 +64,25 @@ export function createApp(monitor) {
     try { await operation; } catch (error) { next(error); }
   };
   app.post('/api/check', mutate(async (req, res) => res.json(await monitor.tick())));
+  app.post('/api/logs', async (req, res) => {
+    const controller = new AbortController();
+    const cancel = () => { if (!res.writableEnded) controller.abort(); };
+    res.on('close', cancel);
+    try { const result = await logs.snapshot(req.body, controller.signal); if (!res.destroyed) res.json(result); }
+    finally { res.off('close', cancel); }
+  });
+  app.post('/api/logs/follow', (req, res) => logs.follow(req.body, res));
+  app.post('/api/incidents/clear', mutate(async (req, res) => res.json(await monitor.clearIncidents(req.body.scope))));
   app.post('/api/namespaces', mutate(async (req, res) => res.json(await monitor.select(req.body.namespaces))));
   app.post('/api/incidents/:id/acknowledge', mutate(async (req, res) => { await monitor.acknowledge(req.params.id); res.json({ ok: true }); }));
   if (monitor.config.demo) app.post('/api/demo', mutate(async (req, res) => {
-    if (!['healthy', 'outage', 'degraded', 'connection'].includes(req.body.scenario)) return res.status(400).json({ error: 'Unknown demo scenario.' });
+    if (!['healthy', 'outage', 'degraded', 'connection', 'oom', 'image', 'pending', 'config'].includes(req.body.scenario)) return res.status(400).json({ error: 'Unknown demo scenario.' });
     if (monitor.running) await monitor.running;
     monitor.client.scenario = req.body.scenario; res.json(await monitor.tick());
   }));
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
-    res.status(400).json({ error: error instanceof SyntaxError ? 'Invalid request.' : error.message || 'Request failed.' });
+    res.status(error.status || 400).json({ error: error instanceof SyntaxError ? 'Invalid request.' : error.message || 'Request failed.' });
   });
   return app;
 }

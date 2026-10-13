@@ -43,3 +43,12 @@ test('collector failure creates a monitor incident, then recovers', () => {
 test('degraded can be disabled for notifications', () => {
   const incidents = new Incidents({ ...config, alertAfter: 1, alertDegraded: false }); incidents.update([entity('degraded')], [], '1'); assert.equal(incidents.history.length, 0);
 });
+test('clear resolved preserves active incidents; clear all re-arms confirmation', () => {
+  const incidents = new Incidents(config);
+  incidents.update([entity('down')], [], '1'); incidents.update([entity('down')], [], '2'); incidents.update([entity('healthy')], [], '3');
+  incidents.update([entity('down')], [], '4'); incidents.update([entity('down')], [], '5');
+  assert.equal(incidents.clear('resolved'), 1); assert.equal(incidents.history.length, 1);
+  assert.equal(incidents.clear('all'), 1); assert.equal(incidents.history.length, 0);
+  assert.equal(incidents.update([entity('down')], [], '6').length, 0); assert.equal(incidents.update([entity('down')], [], '7')[0].type, 'opened');
+  assert.throws(() => incidents.clear('invalid'));
+});
