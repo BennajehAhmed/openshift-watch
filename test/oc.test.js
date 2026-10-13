@@ -33,3 +33,12 @@ test('snapshot logs use execFile with bounded buffers and the pinned context', a
   assert.equal(await client.logs({ namespace: 'dev', pod: 'api-1', container: 'web', tail: 500, sinceSeconds: 300, previous: true }, controller.signal), 'INFO test\n');
   assert.ok(argumentsPassed.includes('--context=my-context')); assert.ok(argumentsPassed.includes('--previous=true')); assert.equal(options.shell, false); assert.equal(options.maxBuffer, 1048576 + 65536); assert.equal(options.signal, controller.signal);
 });
+test('diagnostic commands are pinned, scoped, and bounded at the actual CLI boundary', async () => {
+  const calls = [];
+  const client = new OcClient(config, async (bin, args, options) => { calls.push({ bin, args, options }); return { stdout: args.includes('describe') ? 'Name: api' : args.includes('top') ? 'app 12m 64Mi' : '{"items":[]}' }; });
+  await client.readObject('dev', 'pods', { name: 'api' }); await client.readObject('dev', 'events', { uid: 'abc-123' });
+  await client.readObject('dev', 'endpointslices.discovery.k8s.io', { service: 'api' }); await client.describePod('dev', 'api'); await client.podMetrics('dev', 'api');
+  assert.equal(calls.length, 5); assert.ok(calls.every(c => c.args.includes('--context=my-context') && c.args.includes('--namespace=dev') && c.options.shell === false && c.options.maxBuffer <= 2097152));
+  assert.ok(calls.some(c => c.args.includes('--field-selector=involvedObject.uid=abc-123'))); assert.ok(calls.some(c => c.args.includes('--selector=kubernetes.io/service-name=api')));
+  const before = calls.length; await assert.rejects(() => client.readObject('dev', 'secrets')); await assert.rejects(() => client.describePod('dev', '--help')); assert.equal(calls.length, before);
+});

@@ -36,20 +36,20 @@ export function proposeFixes(app, context = '') {
   } else if (resource) add('Inspect the workload', 'The controller requests replicas, but none were observed. Look for ReplicaFailure, quotas, scheduling problems, or a planned deletion.', cmd(`describe ${resource} ${arg(app.name)}`));
   if (/OOMKilled/.test(evidence)) {
     issue = 'A container was killed for exceeding available memory';
-    add('Check current memory usage', 'Metrics may be unavailable or the container may already have restarted; current usage is not historical proof of the peak.', cmd(`top pod ${arg(pod.name)} --containers`));
+    add('Check current memory usage', 'Metrics may be unavailable or the container may already have restarted; current usage is not historical proof of the peak.', cmd(`adm top pod ${arg(pod.name)} --containers`));
     add('Fix memory usage or resource sizing', 'Investigate heap settings, memory leaks, workload size, and configured requests/limits. Change the owning workload through your normal review/deployment process; no arbitrary limit is recommended here.', null, 'change');
   } else if (/ImagePullBackOff|ErrImagePull|InvalidImageName/.test(evidence)) {
     issue = 'The container image could not be pulled';
     add('Correct image or registry access', 'Read pod events, verify the repository/tag, registry availability, and referenced image-pull-secret configuration. Do not expose secret values. Change the workload through your approved process.', null, 'change');
-  } else if (/CrashLoopBackOff|ContainerFailed|Error/.test(evidence)) {
-    issue = 'The container repeatedly exits or cannot stay running';
-    add('Fix the cause before restarting', 'Check current/previous logs, exit code, startup configuration, dependency connectivity, and liveness/startup probes. Kubernetes already retries a crash-looping container.', null, 'change');
   } else if (/Unschedulable|Pending/.test(evidence)) {
     issue = 'The pod has not reached a running, ready state';
     add('Investigate scheduling and storage', 'Use the events from describe pod. Check resource requests/capacity, quotas, node selectors, taints, and persistent volume claims. Container logs may not exist yet.');
   } else if (/CreateContainerConfigError|CreateContainerError|FailedMount|ContainerCreating|PodInitializing/.test(evidence)) {
     issue = 'Container startup is blocked';
     add('Repair the referenced startup resources', 'Inspect events for missing ConfigMaps/Secrets, failed volume mounts, init-container errors, or runtime issues. Correct references through your deployment process.', null, 'change');
+  } else if (/CrashLoopBackOff|ContainerFailed|Error/.test(evidence)) {
+    issue = 'The container repeatedly exits or cannot stay running';
+    add('Investigate the crash cause', 'Check current/previous logs, exit code, startup configuration, dependency connectivity, and liveness/startup probes. Kubernetes already retries a crash-looping container.');
   } else if (/Evicted|NodeLost|NodeNotReady/.test(evidence)) {
     issue = 'Pod or node disruption is preventing availability';
     add('Inspect node and capacity problems', 'Ask the platform team to review node readiness, disk/memory pressure, and workload scheduling. Recreating a pod does not fix node pressure.');
@@ -58,11 +58,7 @@ export function proposeFixes(app, context = '') {
     add('Review readiness and rollout conditions', 'Inspect readiness dependencies/probes and controller conditions. If a rollout is in progress, observe it before changing the workload.');
   }
   if (['Deployment', 'StatefulSet', 'DaemonSet'].includes(app.kind)) add('Observe rollout status', 'This reads rollout progress; it does not restart the workload.', cmd(`rollout status ${resource}/${arg(app.name)} --timeout=30s`));
-  // Deletion is never offered as a root-cause fix for deterministic startup failures.
-  const persistentFailure = /OOMKilled|CrashLoopBackOff|ImagePullBackOff|ErrImagePull|InvalidImageName|Pending|Unschedulable|CreateContainer|FailedMount|PodInitializing/.test(evidence);
-  if (pod && app.kind === 'Deployment' && pod.owner?.kind === 'ReplicaSet' && pod.workload === `Deployment/${app.name}` && !persistentFailure && !app.missing && !pod.completed) {
-    add('Optional: recreate this controller-managed pod', 'Only after investigation suggests a transient pod-specific fault. Confirm its ReplicaSet ownership, other replica capacity, and your change approval. Deletion interrupts that pod, loses its ephemeral data, and may reduce service capacity. The controller normally recreates it. Direct deletion does not enforce a PodDisruptionBudget; never use force deletion.', cmd(`delete pod ${arg(pod.name)}`), 'disruptive');
-  }
+  // Investigation is read-only, including all suggested commands.
   add('Verify after any approved change', 'Click Check now, inspect new pod events/logs, and confirm user-facing behavior. Acknowledging or clearing an incident does not repair the app.');
   return { issue, evidence, confidence: 'Suggested investigation based on observed state; verify before changing anything', steps, generatedAt: new Date().toISOString() };
 }

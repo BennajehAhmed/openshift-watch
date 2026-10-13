@@ -10,7 +10,7 @@ export function podHealth(pod) {
   const ready = phase === 'Running' && !pod.metadata.deletionTimestamp && pod.status?.conditions?.some(c => c.type === 'Ready' && c.status === 'True') && (pod.status?.containerStatuses || []).every(c => c.ready && !c.state?.waiting && !c.state?.terminated);
   const completed = phase === 'Succeeded';
   return {
-    name: pod.metadata.name, phase, ready: Boolean(ready), completed, restarts,
+    name: pod.metadata.name, uid: pod.metadata.uid || null, phase, ready: Boolean(ready), completed, restarts,
     owner: owner(pod) ? { kind: owner(pod).kind, name: owner(pod).name } : null,
     status: completed ? 'completed' : ready ? 'healthy' : 'down',
     reason: pod.metadata.deletionTimestamp ? 'Terminating' : reason || pod.status?.reason || (ready ? 'Ready' : phase),

@@ -147,7 +147,7 @@ $('app-rows').onclick = event => {
   openInspector(button.dataset.app, button.dataset.open || 'pods');
 };
 $('close-details').onclick = () => $('detail-dialog').close();
-$('detail-dialog').addEventListener('close', () => { stopLogs(); adviceVersion++; detailId = null; });
+$('detail-dialog').addEventListener('close', () => { stopLogs(); stopDiagnostics(); adviceVersion++; detailId = null; });
 if ($('scenario')) $('scenario').onchange = async () => { try { state = await api('/api/demo', { scenario: $('scenario').value }); render(); } catch (e) { showError(e.message); } };
 
 let toastTimer;
@@ -166,24 +166,28 @@ function renderPodDetails() {
   const app = inspectedApp();
   if (!app) { $('detail-content').innerHTML = '<div class="notice">No current application observation. Use proposed fixes to check monitor access.</div>'; return; }
   $('detail-title').textContent = app.name; $('detail-subtitle').textContent = `${app.namespace} / ${app.kind} · Checked ${date(state.checkedAt)}`;
-  $('detail-content').innerHTML = `<div class="inspector-summary">${badge(stale() || app.stale ? 'unknown' : app.status)}<strong>${app.ready} / ${app.desired ?? '?'} ready</strong><span>${escape(app.reason)}</span></div>${stale() || app.stale ? '<div class="notice danger">Last known observations; current health is unknown.</div>' : ''}${app.pods.length ? `<div class="table-scroll"><table class="pods-table"><thead><tr><th>POD / CONTAINERS</th><th>READY</th><th>REASON</th><th>RESTARTS</th><th>LOGS</th></tr></thead><tbody>${app.pods.map(p => `<tr><td><strong>${escape(p.name)}</strong>${p.containers.map(c => `<small>${escape(c.name)} (${escape(c.type || 'app')}): ${c.ready ? 'ready' : escape(c.reason)}${c.lastReason ? ` · Last exit: ${escape(c.lastReason)}` : ''}${c.exitCode !== null && c.exitCode !== undefined ? ` (${c.exitCode})` : ''}</small>`).join('')}</td><td>${p.ready ? 'Yes' : 'No'}</td><td>${escape(p.reason)}</td><td>${p.restarts}</td><td><button class="detail-button" data-pod-logs="${escape(p.name)}">Read logs →</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty"><h3>No pods observed</h3><p>See proposed fixes for controller, scheduling, and missing workload checks.</p></div>'}`;
+  $('detail-content').innerHTML = `<div class="inspector-summary">${badge(stale() || app.stale ? 'unknown' : app.status)}<strong>${app.ready} / ${app.desired ?? '?'} ready</strong><span>${escape(app.reason)}</span></div>${stale() || app.stale ? '<div class="notice danger">Last known observations; current health is unknown.</div>' : ''}<div class="investigation-callout"><div><strong>Find the cause, not just the status</strong><p>Inspect events, exit details, probe settings, resource limits, and service backends together.</p></div><button class="button" data-diagnose="">Investigate application →</button></div>${app.pods.length ? `<div class="table-scroll"><table class="pods-table"><thead><tr><th>POD / CONTAINERS</th><th>READY</th><th>REASON</th><th>RESTARTS</th><th>INVESTIGATE</th></tr></thead><tbody>${app.pods.map(p => `<tr><td><strong>${escape(p.name)}</strong>${p.containers.map(c => `<small>${escape(c.name)} (${escape(c.type || 'app')}): ${c.ready ? 'ready' : escape(c.reason)}${c.lastReason ? ` · Last exit: ${escape(c.lastReason)}` : ''}${c.exitCode !== null && c.exitCode !== undefined ? ` (${c.exitCode})` : ''}</small>`).join('')}</td><td>${p.ready ? 'Yes' : 'No'}</td><td>${escape(p.reason)}</td><td>${p.restarts}</td><td><div class="pod-investigation-actions"><button class="detail-button" data-diagnose="${escape(p.name)}">Diagnose</button><button class="detail-button" data-pod-logs="${escape(p.name)}">Read logs</button></div></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty"><h3>No pods observed</h3><p>Diagnostics can still inspect the owning workload, quota, and controller events.</p></div>'}`;
 }
 function openInspector(id, pane = 'pods') {
-  stopLogs(); detailId = id; adviceVersion++;
+  stopLogs(); stopDiagnostics(); detailId = id; adviceVersion++;
   const app = inspectedApp(), incident = state.incidents.find(i => i.entityId === id);
   $('detail-title').textContent = app?.name || incident?.name || 'Monitor issue';
   $('detail-subtitle').textContent = `${app?.namespace || incident?.namespace || ''} / ${app?.kind || incident?.kind || ''}`;
-  renderPodDetails(); setupLogSelectors();
+  renderPodDetails(); setupLogSelectors(); setupDiagnostics();
   $('detail-dialog').showModal(); selectPane(pane);
 }
 function selectPane(pane) {
   if (pane !== 'logs') stopLogs();
-  for (const name of ['pods', 'logs', 'fixes']) { $(`pane-${name}`).hidden = name !== pane; $(`tab-${name}`).classList.toggle('selected', name === pane); $(`tab-${name}`).setAttribute('aria-selected', String(name === pane)); }
+  if (pane !== 'diagnostics') stopDiagnostics();
+  for (const name of ['pods', 'logs', 'diagnostics', 'fixes']) { $(`pane-${name}`).hidden = name !== pane; $(`tab-${name}`).classList.toggle('selected', name === pane); $(`tab-${name}`).setAttribute('aria-selected', String(name === pane)); }
   if (pane === 'fixes') loadAdvice();
   if (pane === 'logs') requestAnimationFrame(renderLogRows);
+  if (pane === 'diagnostics' && !diagnosticReport) loadDiagnostics(false);
 }
 document.querySelectorAll('[data-pane]').forEach(button => button.onclick = () => selectPane(button.dataset.pane));
 $('detail-content').onclick = event => {
+  const diagnosis = event.target.closest('[data-diagnose]');
+  if (diagnosis) { if (diagnosis.dataset.diagnose) $('diagnostic-pod').value = diagnosis.dataset.diagnose; diagnosticReport = null; selectPane('diagnostics'); return; }
   const button = event.target.closest('[data-pod-logs]'); if (!button) return;
   $('log-pod').value = button.dataset.podLogs; updateContainers(); selectPane('logs'); loadLogs(false);
 };
@@ -299,3 +303,63 @@ $('log-download').onclick = () => {
 $('copy-log-line').onclick = () => copyText($('log-line-text').textContent);
 $('close-log-line').onclick = () => $('log-line-detail').hidden = true;
 window.addEventListener('pagehide', stopLogs);
+
+let diagnosticController = null, diagnosticVersion = 0, diagnosticReport = null;
+function stopDiagnostics() { diagnosticVersion++; diagnosticController?.abort(); diagnosticController = null; $('diagnostic-refresh').disabled = false; }
+function setupDiagnostics() {
+  diagnosticReport = null; $('diagnostic-copy').disabled = true; $('diagnostic-content').innerHTML = '';
+  const app = inspectedApp(), pods = app?.pods || [];
+  $('diagnostic-pod').innerHTML = pods.length ? pods.map(p => `<option value="${escape(p.name)}">${escape(p.name)}${p.ready ? '' : ' · needs attention'}</option>`).join('') : '<option value="">Workload only · no observed pods</option>';
+  if (pods.length) $('diagnostic-pod').value = (pods.find(p => !p.ready && !p.completed) || pods[0]).name;
+  $('diagnostic-refresh').disabled = !app;
+  $('diagnostic-status').textContent = app ? 'Open Diagnostics to gather fresh read-only evidence.' : 'A current monitored application is required. Use Issue & proposed fixes for monitor access problems.';
+}
+$('diagnostic-pod').onchange = () => { diagnosticReport = null; loadDiagnostics(false); };
+$('diagnostic-refresh').onclick = () => loadDiagnostics(true);
+$('diagnostic-copy').onclick = () => { if (diagnosticReport) copyText(diagnosticReport.summary); };
+async function loadDiagnostics(refresh) {
+  stopDiagnostics(); const app = inspectedApp(); if (!app) return;
+  const version = ++diagnosticVersion, id = detailId;
+  diagnosticController = new AbortController(); const controller = diagnosticController;
+  $('diagnostic-refresh').disabled = true; $('diagnostic-copy').disabled = true;
+  $('diagnostic-status').textContent = 'Collecting pod details, events, usage, rollout, storage, and backend evidence…'; $('diagnostic-status').classList.remove('danger');
+  try {
+    const report = await api('/api/diagnostics', { appId: id, pod: $('diagnostic-pod').value || undefined, refresh }, controller.signal);
+    if (version !== diagnosticVersion || detailId !== id) return;
+    diagnosticReport = report;
+    $('diagnostic-status').textContent = `Evidence collected ${date(report.collectedAt)}${report.cached ? ' · cached for up to 10 seconds' : ''}${report.errors.length ? ` · ${report.errors.length} checks unavailable; useful results shown below` : ''}.`;
+    renderDiagnostics(report); $('diagnostic-copy').disabled = false;
+  } catch (e) { if (e.name !== 'AbortError' && version === diagnosticVersion) { $('diagnostic-status').textContent = e.message; $('diagnostic-status').classList.add('danger'); } }
+  finally { if (version === diagnosticVersion) { diagnosticController = null; $('diagnostic-refresh').disabled = false; } }
+}
+function diagnosticTable(headers, rows) { return `<div class="table-scroll"><table class="diagnostic-table"><thead><tr>${headers.map(h => `<th>${escape(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`; }
+function settings(values) { return Object.entries(values || {}).map(([key, value]) => `${escape(key)}: <strong>${escape(value)}</strong>`).join('<br>') || 'Not set'; }
+function renderDiagnostics(r) {
+  const pod = r.pod, w = r.workload;
+  const conditionRows = (pod?.conditions || []).map(c => [escape(c.type), `<span class="diagnostic-condition ${c.status === 'True' ? 'good' : 'attention'}">${escape(c.status)}</span>`, escape(c.reason), escape(c.message || '—')]);
+  const containers = (pod?.containers || []).map(c => `<article class="container-diagnostic"><div class="container-diagnostic-heading"><strong>${escape(c.name)} <small>${escape(c.type)}</small></strong><span>${escape(c.state)} · ${c.restarts} restarts</span></div><p class="image-reference">${escape(c.image)}</p><div class="diagnostic-grid"><div><span class="diagnostic-label">REQUESTS</span>${settings(c.resources.requests)}</div><div><span class="diagnostic-label">LIMITS</span>${settings(c.resources.limits)}</div><div><span class="diagnostic-label">LAST EXIT</span>${escape(c.lastExit || '—')} / code ${escape(c.exitCode ?? '—')}<small>${escape(date(c.lastFinishedAt))}</small></div></div><div class="probe-grid">${Object.entries(c.probes).map(([name, p]) => `<div class="probe-card"><strong>${escape(name)} probe</strong><p>${p ? escape(p.action) : 'Not configured'}</p>${p ? `<small>Delay ${p.initialDelay}s · Every ${p.period}s · Timeout ${p.timeout}s · Failures ${p.failureThreshold}</small>` : ''}</div>`).join('')}</div>${c.references.length ? `<p class="reference-names">Configuration references: ${c.references.map(v => `${escape(v.kind)}/${escape(v.name)}`).join(', ')} · values omitted</p>` : ''}</article>`).join('');
+  const events = r.events.map(e => [escape(date(e.lastAt)), `<span class="event-type ${e.type === 'Warning' ? 'warning' : ''}">${escape(e.type)}</span>`, `<strong>${escape(e.reason)}</strong><small>${escape(e.object)} · Repeated ${e.count} times</small>`, escape(e.message)]);
+  const services = r.services.map(s => [escape(s.name), escape(s.type), s.endpointsKnown ? `<strong>${s.readyEndpoints} / ${s.totalEndpoints}</strong> ready addresses` : 'Unavailable', s.ports.map(p => `${escape(p.port)} → ${escape(p.targetPort)} (${escape(p.protocol)})`).join('<br>'), `<code>${escape(Object.entries(s.selector).map(([k, v]) => `${k}=${v}`).join(', '))}</code>`]);
+  const routes = r.routes.map(route => [escape(route.name), escape(route.host || '—'), escape(route.service), escape(route.targetPort ?? '—'), route.admitted === true ? 'Admitted' : `<span class="diagnostic-condition attention">${route.admitted === false ? 'Not admitted' : 'Unknown'}</span><small>${escape(route.reason || '')}</small>`]);
+  $('diagnostic-content').innerHTML = `<div class="diagnostic-findings"><div class="section-title"><h3>What the evidence suggests</h3><span>Review timestamps and verify before drawing conclusions</span></div>${r.findings.map(f => `<article class="finding-card"><strong>${escape(f.title)}</strong><p>${escape(f.evidence)}</p><small>${escape(f.next)}</small></article>`).join('')}</div>${r.errors.length ? `<details class="diagnostic-section"><summary>Unavailable checks (${r.errors.length})</summary><div class="diagnostic-errors">${r.errors.map(e => `<p><strong>${escape(e.section)}</strong>: ${escape(e.message)}</p>`).join('')}<p>Optional checks depend on your existing account permissions and installed APIs. Application health monitoring continues separately.</p></div></details>` : ''}${r.notices.map(n => `<div class="notice">${escape(n)}</div>`).join('')}
++<details class="diagnostic-section" open><summary>Pod conditions & identity</summary><div class="diagnostic-grid pod-identity"><div><span class="diagnostic-label">POD / PHASE</span>${escape(pod?.name || 'No pod observed')}<small>${escape(pod?.phase || 'Unknown')}</small></div><div><span class="diagnostic-label">NODE / POD IP</span>${escape(pod?.node || '—')}<small>${escape(pod?.ip || '—')}</small></div><div><span class="diagnostic-label">OWNER / QOS</span>${escape(pod?.owner ? `${pod.owner.kind}/${pod.owner.name}` : '—')}<small>${escape(pod?.qos || '—')}</small></div></div>${conditionRows.length ? diagnosticTable(['Condition', 'Status', 'Reason', 'Evidence'], conditionRows) : '<p class="diagnostic-empty">No current pod conditions available.</p>'}</details>
++<details class="diagnostic-section" open><summary>Recent events (${r.events.length})</summary><div class="event-controls"><input id="diagnostic-event-search" type="search" placeholder="Find event messages or reasons…" aria-label="Search diagnostic events"><label class="sound-toggle"><input id="diagnostic-warnings" type="checkbox"> Warnings only</label><span>Latest 200 groups · Events can expire or refer to recovered issues</span></div><div id="diagnostic-events">${events.length ? diagnosticTable(['Last observed', 'Type', 'Reason', 'Message'], events.slice(0, 50)) : '<p class="diagnostic-empty">No retained events returned. This does not prove that no failure occurred.</p>'}</div><div class="diagnostic-pagination"><button id="event-prev" class="text-button">← Previous</button><span id="event-count"></span><button id="event-next" class="text-button">Next →</button></div></details>
++<details class="diagnostic-section" open><summary>Containers, resource limits & probes</summary>${containers || '<p class="diagnostic-empty">No pod specification available.</p>'}</details>
++<details class="diagnostic-section"><summary>Workload & rollout</summary>${w ? `<div class="diagnostic-grid pod-identity"><div><span class="diagnostic-label">READY / DESIRED</span>${w.ready} / ${w.desired ?? '?'}</div><div><span class="diagnostic-label">OBSERVED / GENERATION</span>${w.observedGeneration ?? '?'} / ${w.generation ?? '?'}</div><div><span class="diagnostic-label">STRATEGY</span>${escape(w.strategy || '—')}${w.paused ? ' · paused' : ''}</div></div>${diagnosticTable(['Condition', 'Status', 'Reason', 'Evidence'], w.conditions.map(c => [escape(c.type), escape(c.status), escape(c.reason), escape(c.message || '—')]))}` : '<p class="diagnostic-empty">Workload details unavailable.</p>'}</details>
++<details class="diagnostic-section"><summary>Current CPU & memory usage</summary><p class="diagnostic-hint">This is a current sample, not historical peak usage before a crash.</p>${r.metrics ? `<pre class="diagnostic-pre">${escape(r.metrics)}</pre>` : '<p class="diagnostic-empty">Metrics unavailable or no current pod.</p>'}</details>
++<details class="diagnostic-section" open><summary>Services & route admission</summary>${services.length ? diagnosticTable(['Service', 'Type', 'Backends', 'Ports', 'Selector'], services) : '<p class="diagnostic-empty">No matching selector-based services were observed, or service access is unavailable.</p>'}${routes.length ? diagnosticTable(['Route', 'Host', 'Service', 'Port', 'Admission'], routes) : '<p class="diagnostic-empty">No related routes returned. This report does not perform HTTP requests or connectivity tests.</p>'}</details>
++<details class="diagnostic-section"><summary>Storage, quotas & namespace defaults</summary>${r.storage.length ? diagnosticTable(['Claim', 'Phase', 'Storage class', 'Requested', 'Capacity'], r.storage.map(p => [escape(p.name), escape(p.phase), escape(p.storageClass || '—'), escape(p.requested || '—'), escape(p.capacity || '—')])) : '<p class="diagnostic-empty">No referenced persistent volume claims inspected.</p>'}${r.quotas.length ? diagnosticTable(['Quota', 'Used', 'Hard'], r.quotas.map(q => [escape(q.name), settings(q.used), settings(q.hard)])) : '<p class="diagnostic-empty">No quota data returned.</p>'}${r.limitRanges.map(l => `<div class="namespace-default"><strong>${escape(l.name)}</strong><pre>${escape(JSON.stringify(l.limits, null, 2))}</pre></div>`).join('')}</details>
++<details class="diagnostic-section"><summary>Describe pod (sensitive fields omitted)</summary><p class="diagnostic-hint">Environment values, annotations, startup commands/arguments, and raw probe details are omitted. Structured probe and resource settings are above.</p>${r.describe ? `<pre class="diagnostic-pre">${escape(r.describe)}</pre>` : '<p class="diagnostic-empty">Describe output unavailable or no pod observed.</p>'}</details>`.replace(/\n\+/g, '\n');
+  let eventPage = 0;
+  const renderEvents = () => {
+    const search = $('diagnostic-event-search').value.toLowerCase();
+    const matching = r.events.filter(e => (!$('diagnostic-warnings').checked || e.type === 'Warning') && `${e.reason} ${e.message}`.toLowerCase().includes(search));
+    eventPage = Math.min(eventPage, Math.max(0, Math.ceil(matching.length / 50) - 1));
+    $('event-count').textContent = `${matching.length ? eventPage * 50 + 1 : 0}–${Math.min(matching.length, (eventPage + 1) * 50)} of ${matching.length}`;
+    $('event-prev').disabled = eventPage === 0; $('event-next').disabled = (eventPage + 1) * 50 >= matching.length;
+    $('diagnostic-events').innerHTML = matching.length ? diagnosticTable(['Last observed', 'Type', 'Reason', 'Message'], matching.slice(eventPage * 50, (eventPage + 1) * 50).map(e => [escape(date(e.lastAt)), `<span class="event-type ${e.type === 'Warning' ? 'warning' : ''}">${escape(e.type)}</span>`, `<strong>${escape(e.reason)}</strong><small>${escape(e.object)} · Repeated ${e.count} times</small>`, escape(e.message)])) : '<p class="diagnostic-empty">No retained event groups match these filters.</p>';
+  };
+  $('diagnostic-event-search').oninput = () => { eventPage = 0; renderEvents(); }; $('diagnostic-warnings').onchange = () => { eventPage = 0; renderEvents(); };
+  $('event-prev').onclick = () => { eventPage--; renderEvents(); }; $('event-next').onclick = () => { eventPage++; renderEvents(); }; renderEvents();
+}
+window.addEventListener('pagehide', stopDiagnostics);

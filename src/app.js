@@ -5,11 +5,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LogService } from './logs.js';
 import { proposeFixes } from './advice.js';
+import { DiagnosticsService } from './diagnostics.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export function createApp(monitor) {
   const app = express(); const csrf = randomBytes(32).toString('hex');
   const logs = new LogService(monitor); app.locals.logs = logs;
+  const diagnostics = new DiagnosticsService(monitor); app.locals.diagnostics = diagnostics;
   app.disable('x-powered-by');
   app.use((req, res, next) => {
     // Loopback-only server plus Host check prevents DNS rebinding.
@@ -64,6 +66,13 @@ export function createApp(monitor) {
     try { await operation; } catch (error) { next(error); }
   };
   app.post('/api/check', mutate(async (req, res) => res.json(await monitor.tick())));
+  app.post('/api/diagnostics', async (req, res) => {
+    const controller = new AbortController();
+    const cancel = () => { if (!res.writableEnded) controller.abort(); };
+    res.on('close', cancel);
+    try { const report = await diagnostics.load(req.body, controller.signal); if (!res.destroyed) res.json(report); }
+    finally { res.off('close', cancel); }
+  });
   app.post('/api/logs', async (req, res) => {
     const controller = new AbortController();
     const cancel = () => { if (!res.writableEnded) controller.abort(); };
@@ -76,11 +85,12 @@ export function createApp(monitor) {
   app.post('/api/namespaces', mutate(async (req, res) => res.json(await monitor.select(req.body.namespaces))));
   app.post('/api/incidents/:id/acknowledge', mutate(async (req, res) => { await monitor.acknowledge(req.params.id); res.json({ ok: true }); }));
   if (monitor.config.demo) app.post('/api/demo', mutate(async (req, res) => {
-    if (!['healthy', 'outage', 'degraded', 'connection', 'oom', 'image', 'pending', 'config'].includes(req.body.scenario)) return res.status(400).json({ error: 'Unknown demo scenario.' });
+    if (!['healthy', 'outage', 'degraded', 'connection', 'oom', 'image', 'pending', 'config', 'storage', 'quota', 'probe', 'route'].includes(req.body.scenario)) return res.status(400).json({ error: 'Unknown demo scenario.' });
     if (monitor.running) await monitor.running;
     monitor.client.scenario = req.body.scenario; res.json(await monitor.tick());
   }));
   app.use((error, req, res, next) => {
+    if (res.destroyed) return;
     if (res.headersSent) return next(error);
     res.status(error.status || 400).json({ error: error instanceof SyntaxError ? 'Invalid request.' : error.message || 'Request failed.' });
   });

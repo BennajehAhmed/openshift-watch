@@ -17,6 +17,6 @@ try {
   });
   server.on('error', error => { console.error(`Cannot start dashboard: ${error.message}`); monitor.stop(); process.exitCode = 1; });
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {
-    monitor.stop(); app.locals.logs.close(); server.close(); server.closeAllConnections();
+    monitor.stop(); app.locals.logs.close(); app.locals.diagnostics.close(); server.close(); server.closeAllConnections();
   });
 } catch (error) { console.error(error.message); process.exitCode = 1; }

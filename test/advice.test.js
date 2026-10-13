@@ -12,11 +12,14 @@ test('memory and image failures receive distinct guidance', () => {
   assert.match(proposeFixes(memory).issue, /memory/); assert.ok(proposeFixes(memory).steps.some(s => s.command?.includes('top pod')));
   assert.match(proposeFixes(app('ImagePullBackOff')).issue, /image/);
 });
-test('optional delete requires verified ReplicaSet ownership and is labeled disruptive', () => {
-  const advice = proposeFixes(app('Running')); const deletion = advice.steps.find(s => s.command?.includes('delete pod'));
-  assert.equal(deletion.risk, 'disruptive'); assert.match(deletion.explanation, /PodDisruptionBudget/); assert.ok(!deletion.command.includes('--force'));
-  const standalone = app('Running'); standalone.pods[0].owner = null; assert.ok(!proposeFixes(standalone).steps.some(s => s.command?.includes('delete')));
-  for (const kind of ['StatefulSet', 'Pod', 'Job', 'DeploymentConfig']) { const a = app('Running'); a.kind = kind; assert.ok(!proposeFixes(a).steps.some(s => s.command?.includes('delete'))); }
+test('no destructive command is suggested for any supported workload failure', () => {
+  for (const kind of ['Deployment', 'StatefulSet', 'Pod', 'Job', 'DeploymentConfig', 'DaemonSet']) for (const reason of ['Running', 'CrashLoopBackOff', 'OOMKilled', 'ImagePullBackOff', 'Pending', 'CreateContainerConfigError', 'Evicted']) {
+    const a = app(reason); a.kind = kind;
+    assert.ok(proposeFixes(a).steps.every(s => !s.command || !/\b(delete|apply|edit|patch|scale|restart|exec|debug)\b/.test(s.command)), `${kind}/${reason}`);
+  }
+});
+test('startup configuration errors are not mislabeled as generic crash errors', () => {
+  assert.match(proposeFixes(app('CreateContainerConfigError')).issue, /startup is blocked/);
 });
 test('unknown observations offer access checks with no repair commands', () => {
   const a = app('Last known data'); a.status = 'unknown'; const advice = proposeFixes(a); assert.match(advice.issue, /cannot be established/); assert.ok(advice.steps.every(s => !s.command || !s.command.includes('delete')));

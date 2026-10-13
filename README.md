@@ -100,9 +100,31 @@ Guidance runs entirely locally using deterministic rules and observed pod/contro
 
 Each suggestion states the issue, investigation steps, proposed fixes, and copyable **PowerShell-formatted** `oc` commands with the pinned context and namespace. Commands are for you to review and run in your terminal; the application itself still executes read-only cluster operations. No delete, restart, scale, or edit endpoint exists.
 
-A non-force `oc delete pod` suggestion is available only for a verified ReplicaSet-owned pod attached to a Deployment, when no deterministic crash/image/memory/scheduling/startup failure was observed. It is marked disruptive and conditional on investigation, replica capacity, and approved change procedures. It explicitly explains that direct deletion does not enforce a PodDisruptionBudget. StatefulSets, Jobs, standalone pods, unknown/stale observations, and unverified selector-only ownership do not receive deletion advice. Kubernetes already retries crash-looping containers; deletion is not presented as a root-cause fix for a persistent error.
+The investigation workflow is strictly read-only. No delete, restart, scale, patch, apply, edit, pod exec, or debug command is executed or offered as a copyable fix. Suggestions can explain a possible configuration problem and tell you what to investigate; changes belong in your normal approved deployment process outside this monitor.
 
 The suggestions are possible investigations, not an automatic diagnosis or a guarantee that a proposed change will work. Recheck readiness and actual application behavior after any approved change.
+
+## Read-only diagnostic workspace (1.2)
+
+Open **Inspect → Diagnostics** or click **Diagnose** next to a pod. The collector defaults to a pod that needs attention. It gathers evidence on demand, rather than adding extra requests to every health poll. A workload with no observed pods still gets workload conditions, quota/default information, and workload events.
+
+- **Conditions and identity:** phase, node, pod IP, owner, QoS, readiness conditions, container image, restarts, last termination reason/exit code/time.
+- **Pod and workload events:** latest retained event groups, last occurrence, repetition counts, involved object, reason and message. Search or filter warnings. At most 200 event groups are retained in the response and 50 are rendered per page. Events can expire or describe a recovered problem; missing events do not prove no failure occurred.
+- **Resource settings and probes:** CPU/memory/resource requests and limits, readiness/liveness/startup probe type, target, delays, intervals, timeouts, and thresholds. Exec probe commands and HTTP header values are omitted.
+- **Current resource usage:** an `oc adm top pod ... --containers` sample, if the metrics API and your permissions permit it. Current usage is not the historical peak that preceded OOMKilled.
+- **Workload and rollout:** ready/desired/available/updated counts, strategy, pause state, spec generation versus observed generation, and controller conditions.
+- **Storage and project constraints:** status/capacity of up to ten referenced PVCs, up to thirty resource quotas, and namespace LimitRange defaults. Simple quota saturation findings compare equal reported quantity strings; they do not implement full Kubernetes quantity arithmetic.
+- **Service backends and route admission:** up to five selector-based Services matching the selected pod, ports/selectors, deduplicated ready/non-terminating EndpointSlice addresses, and up to twenty related active OpenShift Routes. Unknown endpoint readiness is treated according to the API's default-ready convention. Address counts are not necessarily pod counts in dual-stack clusters. These are API observations, not connectivity or HTTP tests, and do not cover selectorless Services or services that fail to match the pod at all.
+- **Describe pod:** a bounded `oc describe pods NAME --show-events=false` read. Environment sections, annotations, commands/args, and raw probe details are omitted; the structured resource/probe fields remain available above.
+- **Copy report:** copies a concise local text summary containing observed state, findings, recent events and unavailable checks. It excludes logs, raw describe output, environment values and secret contents. Review internal project names and event messages before sharing it yourself. The app does not send reports to others.
+
+Every unavailable optional check is shown separately while the useful results remain visible. Diagnostic permission/API failures do not create new health-monitoring incidents. The collection allows two concurrent requests, with at most three CLI processes per collection; results are held in a maximum twenty-entry in-memory cache for ten seconds. **Refresh evidence** bypasses the cache. Closing the inspector, switching away from Diagnostics, changing targets, or shutting down cancels collection. Each read has a CLI timeout; JSON reads are capped at 2 MiB, describe at 512 KiB, and metrics at 64 KiB. No diagnostics are stored on disk.
+
+Additional existing-account read permissions may be needed: `get` on the selected Pod/workload/PVC, `list` on Events, Services, EndpointSlices, Routes, ResourceQuotas and LimitRanges, plus metrics access. No RBAC objects or service accounts are created. Forbidden/missing checks are optional and reported in the diagnostic result.
+
+The final CLI boundary allows only predefined reads: specific `get` resources/filters, `describe pods`, `logs`, `adm top pod`, and `config current-context`. It rejects mutation verbs, secret/config-map reads, raw API paths, custom templates, pod exec/debug, arbitrary selectors, namespace overrides, and unknown flags. Both `execFile` and live-log `spawn` use this guard and `shell: false`; callers cannot override the shell option. There is no generic command endpoint.
+
+See [PROJECT_REVIEW.md](PROJECT_REVIEW.md) for the utility review, changes made, and remaining read-only improvements worth considering.
 
 ## What counts as an application?
 
@@ -183,7 +205,7 @@ No mutation commands, pod exec, port-forwarding, shell pipelines, cluster token 
 npm test
 ```
 
-Tests cover replica loss, no pods, scale-to-zero, readiness, init failures, completed jobs, legacy DC ownership, rollout generations, confirmation streaks, escalation, recovery, stale observations, disappearing workloads, CLI arguments/error redaction, HTTP protections, log limits/validation/backpressure/cancellation, virtual log windows, incident clearing, and conditional troubleshooting guidance. Live-cluster behavior must be checked using your own approved account; no real OpenShift credentials are included.
+Tests cover replica loss, no pods, scale-to-zero, readiness, init failures, completed jobs, legacy DC ownership, rollout generations, confirmation streaks, escalation, recovery, stale observations, disappearing workloads, CLI arguments/error redaction, HTTP protections, log limits/validation/backpressure/cancellation, virtual log windows, incident clearing, read-only troubleshooting guidance, joined diagnostic evidence, partial RBAC/API failures, redaction, caching, identity checks, and cancellation/concurrency limits. Live-cluster behavior must be checked using your own approved account; no real OpenShift credentials are included.
 
 If obtaining dependencies yourself rather than using the included folder, use your approved npm registry/mirror:
 
