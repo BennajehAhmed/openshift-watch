@@ -36,14 +36,19 @@ export class LogService {
   async snapshot(input, signal) {
     const options = logOptions(input, this.monitor); const token = this.reserve();
     const controller = new AbortController(); token.stop = () => controller.abort();
+    // Forward caller cancellation without AbortSignal.any (missing on older Node).
+    const cancel = () => controller.abort(signal?.reason);
+    if (signal?.aborted) cancel();
+    else signal?.addEventListener('abort', cancel, { once: true });
     try {
-      const raw = await this.monitor.client.logs(options, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal);
+      if (controller.signal.aborted) { const error = new Error('Log request cancelled.'); error.name = 'AbortError'; throw error; }
+      const raw = await this.monitor.client.logs(options, controller.signal);
       const bytes = Buffer.byteLength(raw);
       const text = Buffer.from(raw).subarray(0, LOG_LIMITS.bytes).toString('utf8');
       const lines = text.split(/\r?\n/); if (lines.at(-1) === '') lines.pop();
       const limited = bytes >= LOG_LIMITS.bytes || lines.length >= options.tail;
       return { lines: lines.slice(-options.tail), limited, bytes: Math.min(bytes, LOG_LIMITS.bytes), maxBytes: LOG_LIMITS.bytes, ...options, checkedAt: new Date().toISOString() };
-    } finally { this.active.delete(token); }
+    } finally { signal?.removeEventListener('abort', cancel); this.active.delete(token); }
   }
   follow(input, response) {
     const options = logOptions(input, this.monitor, true); const token = this.reserve();

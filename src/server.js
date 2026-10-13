@@ -1,8 +1,11 @@
+import dotenv from 'dotenv';
 import { getConfig } from './config.js';
 import { OcClient } from './oc.js';
 import { DemoClient } from './demo.js';
 import { Monitor } from './monitor.js';
 import { createApp } from './app.js';
+
+dotenv.config({ quiet: true });
 
 try {
   const config = getConfig();

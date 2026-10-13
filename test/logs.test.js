@@ -31,6 +31,34 @@ test('snapshot concurrency is capped and shutdown cancels reads', async () => {
   await assert.rejects(() => service.snapshot(input), e => e.status === 429); service.close();
   const results = await Promise.allSettled([first, second, third]); assert.ok(results.every(r => r.status === 'rejected')); assert.equal(service.active.size, 0);
 });
+test('log snapshots and caller cancellation work when AbortSignal.any is unavailable', async () => {
+  const savedAny = AbortSignal.any; AbortSignal.any = undefined;
+  try {
+    const monitor = await setup(); const service = new LogService(monitor);
+    const controller = new AbortController();
+    const result = await service.snapshot(input, controller.signal); assert.equal(result.lines.length, 1000);
+    monitor.client.logs = (options, signal) => new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }));
+    const pending = service.snapshot(input, controller.signal); controller.abort();
+    await assert.rejects(() => pending, /Cancelled/); assert.equal(service.active.size, 0);
+  } finally { AbortSignal.any = savedAny; }
+});
+test('already cancelled requests never start log collection', async () => {
+  const monitor = await setup(); const service = new LogService(monitor); let called = false;
+  monitor.client.logs = async () => { called = true; return ''; };
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(() => service.snapshot(input, controller.signal), e => e.name === 'AbortError');
+  assert.equal(called, false); assert.equal(service.active.size, 0);
+});
+test('snapshot removes the caller abort listener after success or failure', async () => {
+  const monitor = await setup(); const service = new LogService(monitor);
+  for (const fails of [false, true]) {
+    let attached = 0, detached = 0;
+    const signal = { aborted: false, addEventListener: () => attached++, removeEventListener: () => detached++ };
+    monitor.client.logs = async () => { if (fails) throw new Error('Failed'); return 'INFO test\n'; };
+    if (fails) await assert.rejects(() => service.snapshot(input, signal)); else await service.snapshot(input, signal);
+    assert.equal(attached, 1); assert.equal(detached, 1);
+  }
+});
 function streamingSetup(monitor) {
   const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); let killed = 0;
   child.kill = () => { killed++; };

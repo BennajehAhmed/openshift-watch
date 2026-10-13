@@ -1,14 +1,14 @@
 {
   "name": "openshift-watch",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "description": "Local read-only OpenShift health dashboard",
   "type": "module",
   "engines": { "node": ">=22.9.0" },
   "scripts": {
-    "start": "node --env-file-if-exists=.env src/server.js",
-    "demo": "node --env-file-if-exists=.env src/server.js --demo",
+    "start": "node src/server.js",
+    "demo": "node src/server.js --demo",
     "test": "node --test"
   },
-  "dependencies": { "express": "^5.1.0", "express-handlebars": "^8.0.3" }
+  "dependencies": { "dotenv": "^18.0.7", "express": "^5.1.0", "express-handlebars": "^8.0.3" }
 }

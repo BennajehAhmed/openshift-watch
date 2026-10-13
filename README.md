@@ -16,6 +16,8 @@ Extract the ZIP or clone this repository, open a terminal inside `openshift-watc
 npm run demo
 ```
 
+The start/demo scripts use plain `node`. The server loads `.env` using `dotenv`; no `--env-file-if-exists` flag is required. Existing environment variables take precedence over `.env`, and a missing `.env` file does not prevent startup. Log cancellation does not require `AbortSignal.any`.
+
 Open **http://localhost:3100**. Use the demo scenario selector to simulate an outage, partial replica loss, or lost access. Click **Check now** a second time to confirm an incident. Select **All healthy** to see recovery. Demo mode neither calls `oc` nor writes incident/settings files.
 
 ## Connect your real projects
